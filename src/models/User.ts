@@ -7,6 +7,9 @@ interface IUser extends mongoose.Document {
     password: string;
     otp?: string;
     otpExpires?: Date;
+    resetPasswordToken?: string,
+    resetPasswordExpires?: Date,
+    passwordChangedAt?: Date,
     role: "User" | "Admin";
     comparePassword(candidate: string): Promise<boolean>;
     isVerified: Boolean
@@ -41,7 +44,10 @@ const userSchema = new mongoose.Schema<IUser>({
     isVerified: {
         type: Boolean,
         default: false
-    }
+    },
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
+    passwordChangedAt: Date
 }, {
     timestamps: true // createdAt, updatedAt
 })

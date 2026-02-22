@@ -4,8 +4,10 @@ import { User } from "../models/User.js";
 import jwt from "jsonwebtoken";
 import transporter from "../services/nodemailer.js";
 import bcrypt from "bcrypt";
+import { generateResetToken } from "../utils/token.js";
+import crypto from "crypto";
 
-export const generateToken = (id: string, res: Response) => {
+const generateToken = (id: string, res: Response) => {
     const token = jwt.sign({id}, process.env.JWT_SECRET!, {
         expiresIn: "7d"
     })
@@ -106,15 +108,6 @@ export const login = async (req: Request, res: Response) => {
 
 export const logout = async (req: Request, res: Response) => {
     try {
-        const token = req.cookies?.jwt;
-        if (token) {
-            // Verify JWT to get user ID
-            const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: string };
-
-            // Find user and reset isVerified
-            await User.findByIdAndUpdate(decoded.id, { isVerified: false });
-        }
-
         res.clearCookie("jwt", {
             httpOnly: true,
             secure: process.env.NODE_ENV !== "development",
@@ -170,7 +163,34 @@ export const verifyOTP = async (req: Request, res: Response) => {
 
 export const forgotPassword = async (req: Request, res: Response) => {
     try {
+        const emailSchema = z.object({
+            email: z.string().email()
+        });
 
+        const { email } = emailSchema.parse(req.body);
+
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(200).json({ message: "If account exists, reset link sent" });
+        }
+
+        const { rawToken, hashedToken } = generateResetToken();
+
+        user.resetPasswordToken = hashedToken;
+        user.resetPasswordExpires = new Date(Date.now() + 3 * 60 * 1000); // 3 min
+        await user.save();
+
+        const resetURL = `${process.env.CLIENT_URL}/reset-password/${rawToken}`;
+
+        await transporter.sendMail({
+            to: user.email,
+            subject: "Password Reset",
+            html: `<p>Click below to reset password:</p>
+                   <a href="${resetURL}">${resetURL}</a>
+                   <p>Expires in 3 minutes</p>`
+        });
+
+        res.json({ message: "If account exists, reset link sent" });
     } catch(error) {
         console.log(error)
         res.status(500).json({ message: "Internal server error" })
@@ -179,7 +199,33 @@ export const forgotPassword = async (req: Request, res: Response) => {
 
 export const changePassword = async (req: Request, res: Response) => {
     try {
+        const schema = z.object({
+            token: z.string(),
+            password: z.string().min(8).max(15)
+        });
 
+        const { token, password } = schema.parse(req.body);
+
+        const hashedToken = crypto.createHash("sha256")
+            .update(token)
+            .digest("hex");
+
+        const user = await User.findOne({
+            resetPasswordToken: hashedToken,
+            resetPasswordExpires: { $gt: new Date() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ message: "Invalid or expired token" });
+        }
+
+        user.password = password;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+
+        await user.save();
+
+        res.json({ message: "Password reset successful" });
     } catch(error) {
         console.log(error)
         res.status(500).json({ message: "Internal server error" })
